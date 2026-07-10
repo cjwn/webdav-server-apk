@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WebDAV Server</string>
+
+    <!-- Tabs -->
+    <string name="tab_home">Home</string>
+    <string name="tab_files">Files</string>
+    <string name="tab_users">Users</string>
+    <string name="tab_log">Log</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- Home -->
+    <string name="server">Server</string>
+    <string name="running">RUNNING</string>
+    <string name="stopped">STOPPED</string>
+    <string name="uptime">Uptime</string>
+    <string name="address">Address</string>
+    <string name="qr_code">QR Code</string>
+    <string name="start_server">Start Server</string>
+    <string name="stop_server">Stop Server</string>
+    <string name="copied">Copied to clipboard</string>
+
+    <!-- Notifications -->
+    <string name="notif_channel_name">WebDAV Server</string>
+    <string name="notif_channel_desc">Shows server running state, address and uptime</string>
+
+    <!-- Setup wizard -->
+    <string name="setup_title">Welcome</string>
+    <string name="setup_subtitle">Create your administrator account to get started.</string>
+    <string name="username">Username</string>
+    <string name="password">Password</string>
+    <string name="confirm_password">Confirm Password</string>
+    <string name="create_account">Create Account</string>
+
+    <!-- Generic -->
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
+    <string name="delete">Delete</string>
+    <string name="undo">Undo</string>
+</resources>

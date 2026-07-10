@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ios_grouped_bg_light">#F2F2F7</color>
+    <color name="ios_surface_light">#FFFFFF</color>
+    <color name="ios_bg_dark">#000000</color>
+    <color name="ios_surface_dark">#1C1C1E</color>
+    <color name="ios_blue">#0A84FF</color>
+    <color name="ios_green">#34C759</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="ic_launcher_background">#0A84FF</color>
+
+    <!-- Launch/splash window background. Overridden in values-night for dark mode
+         so the OS splash + initial frame follow the SYSTEM theme. -->
+    <color name="window_background">#000000</color>
+</resources>
