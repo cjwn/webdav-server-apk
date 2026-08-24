@@ -1,0 +1,19 @@
+A self-contained WebDAV server that runs on your Android phone.
+
+Built with Kotlin, Jetpack Compose (Material 3), an AMOLED dark UI, and an embedded Ktor (CIO) engine.
+
+Turn your Android device into a local / offline file sync hub on your private network — no cloud account required.
+
+Features:
+• Embedded WebDAV server in a foreground service (stays alive with notifications + optional “run in background”)
+• Multi-user accounts: Admin (global root) vs User (personal home folder)
+• Read-only users
+• In-app Files browser with live refresh and previews (images, audio, text)
+• Request log for debugging client access
+• Browser download portal (form login + one-time download tokens)
+• Setup wizard + QR code for the server URL
+• AMOLED theme
+
+Supported WebDAV methods: OPTIONS, GET/HEAD (Range), PUT, DELETE, MKCOL, PROPFIND, PROPPATCH, COPY, MOVE, LOCK/UNLOCK
+
+Keep the server on a network you control. Traffic uses HTTP Basic over the LAN (typical for local WebDAV).

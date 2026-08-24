@@ -1,0 +1,6 @@
+Initial release
+• Full self-contained WebDAV server for Android
+• Multi-user support (Admin / User / Read-only)
+• Foreground service with live status, QR code and request log
+• In-app file browser + AMOLED dark UI
+• Built with Kotlin + Jetpack Compose + Ktor CIO
