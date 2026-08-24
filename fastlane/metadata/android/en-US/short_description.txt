@@ -1,1 +1,1 @@
-Self-contained WebDAV server — turn your phone into a local file sync hub on your LAN
+Self-contained WebDAV server for local file sync on your LAN
