@@ -72,6 +72,12 @@ class PropfindHandler(private val saf: SafResolver) {
         }
 
         val buildMs = (System.nanoTime() - startedNs) / 1_000_000
+        // Response headers remain visible in curl even if vivo suppresses Logcat.
+        // These metrics cover building the XML, not network transfer/Finder parsing.
+        call.response.header("X-WebDAV-Entries", listedEntries.toString())
+        call.response.header("X-WebDAV-Listing-Ms", listingMs.toString())
+        call.response.header("X-WebDAV-Build-Ms", buildMs.toString())
+        call.response.header("X-WebDAV-Xml-Chars", xml.length.toString())
         Log.i("WebDavPerf", "PROPFIND depth=$depth items=$listedEntries listMs=$listingMs buildMs=$buildMs xmlChars=${xml.length}")
         call.respondText(xml, WebDavConstants.XML_UTF8, HttpStatusCode.MultiStatus)
         return HttpStatusCode.MultiStatus
