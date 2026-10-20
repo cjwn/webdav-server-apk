@@ -144,10 +144,8 @@ class FilesViewModel : ViewModel() {
     /** Called when the Files tab becomes visible (navigate back from another tab). */
     fun onScreenResumed() {
         if (_state.value.noRoot) return
-        // Skip if a load is already in flight (e.g. first open races with init).
-        if (!_state.value.isLoading) {
-            refresh()
-        }
+        // Keep the current snapshot when the Files tab becomes visible again.
+        // Directory navigation and explicit Refresh still load up-to-date data.
         if (_state.value.autoRefresh) restartLiveWatch()
     }
 
@@ -205,11 +203,8 @@ class FilesViewModel : ViewModel() {
             }
             // Local FileObserver for create/delete/move outside the app (ADB, etc.).
             restartLiveWatch()
-            // Slow safety poll (external tools that don't trigger FileObserver).
-            while (isActive) {
-                delay(2_500)
-                silentReloadIfChanged()
-            }
+            // Do not poll directories on a timer. A large Camera directory
+            // is expensive to enumerate, even when nothing has changed.
         }
     }
 
