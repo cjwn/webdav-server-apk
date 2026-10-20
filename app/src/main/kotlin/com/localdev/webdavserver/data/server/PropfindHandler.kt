@@ -1,6 +1,7 @@
 package com.localdev.webdavserver.data.server
 
 import androidx.documentfile.provider.DocumentFile
+import android.util.Log
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.path
@@ -47,13 +48,20 @@ class PropfindHandler(private val saf: SafResolver) {
         val depth = call.request.headers["Depth"] ?: "1"
         val basePath = call.request.path()
 
+        val startedNs = System.nanoTime()
+        var listingMs = 0L
+        var listedEntries = 0
         val xml = withContext(Dispatchers.IO) {
             buildString {
                 append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
                 append("<D:multistatus xmlns:D=\"DAV:\">\n")
                 append(responseXml(basePath, doc))
                 if (doc.isDirectory && depth != "0") {
-                    saf.listChildren(doc, includeHidden).forEach { node ->
+                    val listStartNs = System.nanoTime()
+                    val nodes = saf.listChildrenForPropfind(doc, includeHidden)
+                    listingMs = (System.nanoTime() - listStartNs) / 1_000_000
+                    listedEntries = nodes.size
+                    nodes.forEach { node ->
                         val childHref = joinHref(basePath, node.name, node.isDirectory)
                         append(nodeResponseXml(childHref, node.isDirectory, node.sizeBytes,
                             node.lastModified, node.mimeType))
@@ -63,6 +71,8 @@ class PropfindHandler(private val saf: SafResolver) {
             }
         }
 
+        val buildMs = (System.nanoTime() - startedNs) / 1_000_000
+        Log.i("WebDavPerf", "PROPFIND depth=$depth items=$listedEntries listMs=$listingMs buildMs=$buildMs xmlChars=${xml.length}")
         call.respondText(xml, WebDavConstants.XML_UTF8, HttpStatusCode.MultiStatus)
         return HttpStatusCode.MultiStatus
     }
