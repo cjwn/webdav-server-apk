@@ -98,6 +98,56 @@ class SafResolver(private val context: Context) {
             .toList()
     }
 
+    /**
+     * Optimized metadata listing for PROPFIND. Avoids the extra listFiles() call
+     * in toNode() for every directory merely to populate childCount, which
+     * WebDAV does not use. Plain filesystem roots use java.io.File directly,
+     * preserving the existing SAF fallback for content:// roots.
+     */
+    fun listChildrenForPropfind(dir: DocumentFile, includeHidden: Boolean): List<FileNode> {
+        val file = fileOf(dir)
+        if (file != null) {
+            if (!file.isDirectory) return emptyList()
+            return (file.listFiles() ?: emptyArray())
+                .asSequence()
+                .filter { includeHidden || !it.name.startsWith(".") }
+                .map { child ->
+                    val isDir = child.isDirectory
+                    FileNode(
+                        uri = Uri.fromFile(child).toString(),
+                        name = child.name,
+                        isDirectory = isDir,
+                        sizeBytes = if (isDir) 0L else child.length(),
+                        lastModified = child.lastModified(),
+                        mimeType = guessMime(child.name),
+                        childCount = 0
+                    )
+                }
+                .sortedWith(compareByDescending<FileNode> { it.isDirectory }.thenBy { it.name.lowercase() })
+                .toList()
+        }
+
+        if (!dir.isDirectory) return emptyList()
+        return dir.listFiles().asSequence()
+            .filter { it.name != null }
+            .filter { includeHidden || !it.name!!.startsWith(".") }
+            .map { child ->
+                val name = child.name ?: "?"
+                val isDir = child.isDirectory
+                FileNode(
+                    uri = child.uri.toString(),
+                    name = name,
+                    isDirectory = isDir,
+                    sizeBytes = if (isDir) 0L else child.length(),
+                    lastModified = child.lastModified(),
+                    mimeType = child.type ?: guessMime(name),
+                    childCount = 0
+                )
+            }
+            .sortedWith(compareByDescending<FileNode> { it.isDirectory }.thenBy { it.name.lowercase() })
+            .toList()
+    }
+
     fun DocumentFile.toNode(): FileNode {
         val n = name ?: "?"
         val children = if (isDirectory) runCatching { listFiles().size }.getOrDefault(0) else 0
