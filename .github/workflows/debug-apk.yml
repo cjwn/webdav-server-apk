@@ -2,7 +2,7 @@ name: Debug APK
 
 on:
   push:
-    branches: [feature/fast-propfind-listing]
+    branches: [feature/fast-propfind-listing, feature/manual-files-refresh-and-dav-diagnostics]
   workflow_dispatch:
 
 permissions:
@@ -49,7 +49,7 @@ jobs:
           "$manager" --sdk_root="$sdk" 'platforms;android-36' 'build-tools;34.0.0' 2>&1 | tee "$RUNNER_TEMP/sdk-install.log"
 
       - name: Build debug APK (keep WebDavPerf logging)
-        run: gradle --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process :app:assembleDebug
+        run: gradle --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process :app:assembleDebug :app:testDebugUnitTest
       - name: Verify and package APK
         shell: bash
         run: |
@@ -57,15 +57,15 @@ jobs:
           apk=app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$apk"
           mkdir -p artifacts
-          cp "$apk" artifacts/webdav-fast-propfind-debug.apk
+          cp "$apk" artifacts/webdav-manual-refresh-debug.apk
           cp docs/vivo-performance-retest.md artifacts/
           git rev-parse HEAD > artifacts/COMMIT.txt
           cd artifacts
-          sha256sum webdav-fast-propfind-debug.apk > SHA256SUMS.txt
+          sha256sum webdav-manual-refresh-debug.apk > SHA256SUMS.txt
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
-          name: webdav-fast-propfind-debug-${{ github.sha }}
+          name: webdav-manual-refresh-debug-${{ github.sha }}
           path: artifacts/
           if-no-files-found: error
           retention-days: 30

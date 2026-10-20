@@ -3,9 +3,9 @@
 ## 下载与安装
 
 1. GitHub 仓库 → Actions → Debug APK → 选择本分支成功的运行。
-2. 页面底部 Artifacts → 下载 `webdav-fast-propfind-debug-<commit>`，解压 ZIP。
+2. 页面底部 Artifacts → 下载 `webdav-manual-refresh-debug-<commit>`，解压 ZIP。
 3. 可用 `sha256sum -c SHA256SUMS.txt` 校验 APK；`COMMIT.txt` 记录实际构建提交。
-4. 将 `webdav-fast-propfind-debug.apk` 传到 Android 12+ 的 vivo 手机上，用文件管理器打开。按系统提示为该文件管理器允许“安装未知应用”。
+4. 将 `webdav-manual-refresh-debug.apk` 传到 Android 12+ 的 vivo 手机上，用文件管理器打开。按系统提示为该文件管理器允许“安装未知应用”。
 5. 包名为 `com.localdev.webdavserver.debug`，可以与正式版共存。如果已有同包名、不同签名的 Debug 版本，不能直接覆盖；先备份设置，再卸载旧 Debug 版或换回同一签名构建。卸载会清除该应用设置。
 6. 首次启动创建管理员，授予文件访问、通知权限，设置测试目录并启动服务。vivo 的电池/后台设置中允许该应用后台运行，复测时保持前台与亮屏。
 
@@ -48,3 +48,19 @@ curl --user "$dav_user" --request PROPFIND --header 'Depth: 1' \
 选择含大量直接子目录的目录，子目录内各有较多文件，最容易验证“避免扫描每个子目录”的优化。分别测试普通文件路径根目录和现有 SAF（content://）根目录（若有），不要为测试强行转换已有根目录。
 
 与旧版对比时保持同一手机、目录内容、根目录类型、账号、隐藏文件设置和网络条件。旧版若没有 WebDavPerf 日志，比较客户端总耗时及返回结果，不要把客户端总耗时直接等同于新版本的 buildMs。此 APK 的编译成功不代表已经完成真机性能验证。
+
+## PR #2：手动刷新与 HTTP 诊断
+
+此分支保留 Draft PR。Files 首次选择根目录、切换目录、手动 Reload、文件修改事件会扫描目录；页面恢复、切换回来、等待 2.5 秒、空目录收到无关设置变化均不会触发扫描。隐藏文件开关只过滤已有快照。文件变更使用 FileChangeBus / FileObserver，并将短时间内的事件合并；没有定时轮询。SAF 根目录的外部修改若未产生进程内事件，请手动刷新。
+
+使用上文请求并加 `--dump-header propfind-headers.txt`，或直接执行（替换手机地址与用户名，交互输入密码）：
+
+```bash
+curl --user your_username --request PROPFIND --header 'Depth: 1' \
+  --dump-header propfind-headers.txt --output propfind.xml \
+  http://192.168.1.100:8080/test-folder/
+```
+
+成功响应应为 HTTP 207，并包含 `X-WebDAV-Entries`、`X-WebDAV-Listing-Ms`、`X-WebDAV-Build-Ms`、`X-WebDAV-Xml-Chars`。Entries 不包含目录自身；Build-Ms 包含 Listing-Ms；Xml-Chars 是 Kotlin UTF-16 字符单元数，不是网络字节数。Depth: 0 不列举子项，Entries 和 Listing-Ms 应为 0。WebDavPerf Logcat 保持不变。
+
+真机检查：首次进入目录后等待至少 10 秒，再切到 Home 并返回、锁屏解锁；列表应保持原快照。点击 Reload 或进入子目录时才重新加载。通过已有文件操作修改专用测试目录，列表应随变更更新。不要为复测修改或删除真实用户文件。覆盖安装遇到签名不一致时先备份应用配置，勿直接卸载丢失设置。

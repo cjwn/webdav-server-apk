@@ -4,19 +4,19 @@ import android.net.Uri
 import android.os.FileObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.localdev.webdavserver.data.local.model.ServerConfig
 import com.localdev.webdavserver.data.local.model.FileNode
 import com.localdev.webdavserver.data.server.FileChangeBus
 import com.localdev.webdavserver.di.AppModule
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -33,15 +33,15 @@ data class FilesUiState(
     val sort: SortMode = SortMode.NAME,
     val isLoading: Boolean = false,
     val showHidden: Boolean = false,
-    val autoRefresh: Boolean = false,
     val noRoot: Boolean = false,
     val clipboard: Clipboard? = null,
     val message: String? = null
 ) {
     val filtered: List<FileNode>
         get() {
-            val base = if (query.isBlank()) nodes
-            else nodes.filter { it.name.contains(query, ignoreCase = true) }
+            val visible = nodes.filter { showHidden || !it.name.startsWith(".") }
+            val base = if (query.isBlank()) visible
+            else visible.filter { it.name.contains(query, ignoreCase = true) }
             val sorted = when (sort) {
                 SortMode.NAME -> base.sortedBy { it.name.lowercase() }
                 SortMode.SIZE -> base.sortedByDescending { it.sizeBytes }
@@ -54,11 +54,21 @@ data class FilesUiState(
         get() = stack.map { it.second }
 }
 
-class FilesViewModel : ViewModel() {
+class FilesViewModel internal constructor(
+    configs: Flow<ServerConfig>,
+    private val browse: suspend (String, Boolean) -> List<FileNode>,
+    private val watchFilesystem: Boolean
+) : ViewModel() {
+    constructor() : this(
+        AppModule.settingsRepository.config,
+        { uri, hidden -> AppModule.browseFilesUseCase(uri, hidden) },
+        true
+    )
 
     private val _state = MutableStateFlow(FilesUiState())
     val state: StateFlow<FilesUiState> = _state.asStateFlow()
 
+    private var loadJob: Job? = null
     private var liveJob: Job? = null
     private var dirObserver: FileObserver? = null
 
@@ -66,22 +76,22 @@ class FilesViewModel : ViewModel() {
         // Observe settings continuously so a root folder picked later (in Setup
         // or Settings) is reflected immediately without restarting the screen.
         viewModelScope.launch {
-            AppModule.settingsRepository.config.collect { config ->
+            configs.collect { config ->
                 val newRoot = config.rootFolderUri
-                val prevHidden = _state.value.showHidden
                 val prevRoot = _state.value.rootUri
-                _state.update { it.copy(showHidden = config.showHiddenFiles) }
+                _state.update { it.copy(showHidden = config.showHiddenFiles, noRoot = newRoot == null) }
 
                 if (newRoot != prevRoot) {
                     if (newRoot == null) {
-                        stopLive()
+                        loadJob?.cancel()
+                        stopDirObserver()
                         _state.update {
                             it.copy(
                                 rootUri = null,
                                 noRoot = true,
                                 stack = emptyList(),
                                 nodes = emptyList(),
-                                autoRefresh = false
+                                isLoading = false
                             )
                         }
                     } else {
@@ -94,21 +104,12 @@ class FilesViewModel : ViewModel() {
                             )
                         }
                         load(newRoot)
-                        if (_state.value.autoRefresh) restartLiveWatch()
-                    }
-                } else if (newRoot != null &&
-                    (prevHidden != config.showHiddenFiles ||
-                        (_state.value.nodes.isEmpty() && !_state.value.isLoading))
-                ) {
-                    // Same root: reload when hidden-files setting flips, or first load.
-                    if (_state.value.autoRefresh) {
-                        silentReloadIfChanged()
-                    } else {
-                        load(newRoot)
+                        restartLiveWatch()
                     }
                 }
             }
         }
+        startLive()
     }
 
     /** Manual reload of the current directory. */
@@ -129,57 +130,43 @@ class FilesViewModel : ViewModel() {
         )
     }
 
-    fun toggleAutoRefresh() {
-        val enabled = !_state.value.autoRefresh
-        _state.update { it.copy(autoRefresh = enabled) }
-        if (enabled) {
-            startLive()
-            // Same as pressing the refresh button when Live is turned on.
-            refresh()
-        } else {
-            stopLive()
-        }
-    }
-
-    /** Called when the Files tab becomes visible (navigate back from another tab). */
-    fun onScreenResumed() {
-        if (_state.value.noRoot) return
-        // Keep the current snapshot when the Files tab becomes visible again.
-        // Directory navigation and explicit Refresh still load up-to-date data.
-        if (_state.value.autoRefresh) restartLiveWatch()
-    }
+    /** Returning to the screen preserves its snapshot and never scans disk. */
+    fun onScreenResumed() = Unit
 
     fun open(node: FileNode) {
         if (!node.isDirectory) return
         _state.update { it.copy(stack = it.stack + (node.uri to node.name), query = "") }
         load(node.uri)
-        if (_state.value.autoRefresh) restartLiveWatch()
+        restartLiveWatch()
     }
 
     fun navigateTo(index: Int) {
+        if (index !in _state.value.stack.indices || index == _state.value.stack.lastIndex) return
         val newStack = _state.value.stack.take(index + 1)
         _state.update { it.copy(stack = newStack, query = "") }
         newStack.lastOrNull()?.let { load(it.first) }
-        if (_state.value.autoRefresh) restartLiveWatch()
+        restartLiveWatch()
     }
 
     private fun load(uri: String) {
-        viewModelScope.launch {
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
             _state.update { it.copy(isLoading = true) }
-            val nodes = AppModule.browseFilesUseCase(uri, _state.value.showHidden)
+            val nodes = browse(uri, true)
             _state.update { it.copy(nodes = nodes, isLoading = false) }
         }
     }
 
     /**
-     * Silent reload used by Live mode — no spinner, no log entries, only updates
+     * Event-driven reload — no timer, spinner or log entries; only updates
      * UI when the directory contents actually changed.
      */
     private suspend fun silentReloadIfChanged() {
         val top = _state.value.stack.lastOrNull()?.first ?: _state.value.rootUri ?: return
-        val nodes = AppModule.browseFilesUseCase(top, _state.value.showHidden)
+        val nodes = browse(top, true)
         val prev = _state.value.nodes
-        if (directorySignature(prev) != directorySignature(nodes)) {
+        if (top == currentDir() && !_state.value.isLoading &&
+            directorySignature(prev) != directorySignature(nodes)) {
             _state.update { it.copy(nodes = nodes) }
         }
     }
@@ -193,16 +180,10 @@ class FilesViewModel : ViewModel() {
     private fun startLive() {
         liveJob?.cancel()
         liveJob = viewModelScope.launch {
-            // Immediate refresh when WebDAV / in-app ops mutate files (no logs).
-            launch {
-                FileChangeBus.events
-                    .debounce(200)
-                    .collectLatest {
-                        silentReloadIfChanged()
-                    }
-            }
-            // Local FileObserver for create/delete/move outside the app (ADB, etc.).
-            restartLiveWatch()
+            // Refresh only on actual mutations; coalesce bursts from writes.
+            FileChangeBus.events
+                .debounce(200)
+                .collectLatest { silentReloadIfChanged() }
             // Do not poll directories on a timer. A large Camera directory
             // is expensive to enumerate, even when nothing has changed.
         }
@@ -216,7 +197,7 @@ class FilesViewModel : ViewModel() {
 
     private fun restartLiveWatch() {
         stopDirObserver()
-        if (!_state.value.autoRefresh) return
+        if (!watchFilesystem) return
         val path = filesystemPath(currentDir()) ?: return
         val dir = File(path)
         if (!dir.isDirectory) return
@@ -333,6 +314,7 @@ class FilesViewModel : ViewModel() {
     }
 
     override fun onCleared() {
+        loadJob?.cancel()
         stopLive()
         super.onCleared()
     }

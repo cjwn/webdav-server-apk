@@ -111,6 +111,11 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("io.ktor:ktor-server-test-host:2.3.12")
+    testImplementation("org.mockito:mockito-core:5.14.2")
+
     // Ktor server (CIO engine only — smallest server stack)
     implementation("io.ktor:ktor-server-core:2.3.12")
     implementation("io.ktor:ktor-server-cio:2.3.12")
