@@ -77,7 +77,7 @@ fun FilesScreen(viewModel: FilesViewModel = viewModel()) {
     var renameTarget by remember { mutableStateOf<FileNode?>(null) }
     var deleteTarget by remember { mutableStateOf<FileNode?>(null) }
 
-    // Auto-press refresh when opening/returning to the Files tab.
+    // Preserve the existing file list when returning to this tab.
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -108,21 +108,6 @@ fun FilesScreen(viewModel: FilesViewModel = viewModel()) {
             ) {
                 Text("Files", style = MaterialTheme.typography.headlineLarge)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Live",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (state.autoRefresh) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    IconButton(onClick = viewModel::toggleAutoRefresh, modifier = Modifier.size(38.dp)) {
-                        Icon(
-                            if (state.autoRefresh) Icons.Filled.Clear else Icons.Filled.PlayArrow,
-                            contentDescription = "Toggle live updates",
-                            tint = if (state.autoRefresh) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
                     IconButton(onClick = viewModel::refresh, modifier = Modifier.size(38.dp)) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Reload",
                             tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
