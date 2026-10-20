@@ -1,0 +1,47 @@
+name: Debug APK
+
+on:
+  push:
+    branches: [feature/fast-propfind-listing]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debug-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android SDK packages
+        run: sdkmanager 'platforms;android-36' 'build-tools;34.0.0'
+      - name: Build debug APK (keep WebDavPerf logging)
+        run: gradle --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process :app:assembleDebug
+      - name: Verify and package APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose "$apk"
+          mkdir -p artifacts
+          cp "$apk" artifacts/webdav-fast-propfind-debug.apk
+          cp docs/vivo-performance-retest.md artifacts/
+          git rev-parse HEAD > artifacts/COMMIT.txt
+          cd artifacts
+          sha256sum webdav-fast-propfind-debug.apk > SHA256SUMS.txt
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: webdav-fast-propfind-debug-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
