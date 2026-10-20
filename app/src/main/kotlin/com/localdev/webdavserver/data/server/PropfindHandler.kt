@@ -5,7 +5,9 @@ import android.util.Log
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.path
+import io.ktor.server.response.header
 import io.ktor.server.response.respondText
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -30,7 +32,10 @@ object HttpDates {
  * Handles PROPFIND — returns a 207 Multi-Status XML document describing the
  * properties of a resource and (optionally) its children.
  */
-class PropfindHandler(private val saf: SafResolver) {
+class PropfindHandler(
+    private val saf: SafResolver,
+    private val listingDispatcher: CoroutineDispatcher = Dispatchers.IO
+) {
 
     suspend fun handle(
         call: ApplicationCall,
@@ -51,7 +56,7 @@ class PropfindHandler(private val saf: SafResolver) {
         val startedNs = System.nanoTime()
         var listingMs = 0L
         var listedEntries = 0
-        val xml = withContext(Dispatchers.IO) {
+        val xml = withContext(listingDispatcher) {
             buildString {
                 append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
                 append("<D:multistatus xmlns:D=\"DAV:\">\n")
@@ -72,6 +77,12 @@ class PropfindHandler(private val saf: SafResolver) {
         }
 
         val buildMs = (System.nanoTime() - startedNs) / 1_000_000
+        // Response headers remain visible in curl even if vivo suppresses Logcat.
+        // These metrics cover building the XML, not network transfer/Finder parsing.
+        call.response.header("X-WebDAV-Entries", listedEntries.toString())
+        call.response.header("X-WebDAV-Listing-Ms", listingMs.toString())
+        call.response.header("X-WebDAV-Build-Ms", buildMs.toString())
+        call.response.header("X-WebDAV-Xml-Chars", xml.length.toString())
         Log.i("WebDavPerf", "PROPFIND depth=$depth items=$listedEntries listMs=$listingMs buildMs=$buildMs xmlChars=${xml.length}")
         call.respondText(xml, WebDavConstants.XML_UTF8, HttpStatusCode.MultiStatus)
         return HttpStatusCode.MultiStatus
