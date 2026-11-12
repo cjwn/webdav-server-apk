@@ -41,7 +41,8 @@ class BrowserAccess(
     private val saf: SafResolver,
     private val userRepository: UserRepository,
     private val resolveEffectiveRoot: (UserEntity) -> String?,
-    private val onBytesOut: (Long) -> Unit
+    private val onBytesOut: (Long) -> Unit,
+    private val cameraAccess: () -> CameraAccess = { CameraAccess() }
 ) {
     private val tokens = ConcurrentHashMap<String, DownloadToken>()
     private val random = SecureRandom()
@@ -76,7 +77,8 @@ class BrowserAccess(
 
         // Root: never list in a browser.
         if (path.isEmpty() || path == "/") {
-            call.respondText(useClientHtml(), ContentType.Text.Html, HttpStatusCode.OK)
+            call.response.header("Cache-Control", "no-store")
+            call.respondText(useClientHtml(cameraAccess()), ContentType.Text.Html, HttpStatusCode.OK)
             return BrowserHandleResult(true, "browser", HttpStatusCode.OK)
         }
 
@@ -140,7 +142,8 @@ class BrowserAccess(
             return BrowserHandleResult(true, user.username, HttpStatusCode.InternalServerError)
         }
 
-        val doc = saf.resolve(root, filePath)
+        val doc = root.takeUnless { cameraAccess().blocks(SafResolver.splitPath(filePath)) }
+            ?.let { saf.resolve(it, filePath) }
         if (doc == null || !doc.exists()) {
             call.respondText(
                 rejectedHtml("File not found, or you do not have access to this path."),
@@ -190,7 +193,8 @@ class BrowserAccess(
         }
 
         val root = saf.rootDocument(entry.effectiveRoot)
-        val doc = root?.let { saf.resolve(it, entry.relativePath) }
+        val doc = root?.takeUnless { cameraAccess().blocks(SafResolver.splitPath(entry.relativePath)) }
+            ?.let { saf.resolve(it, entry.relativePath) }
         if (doc == null || !doc.exists() || doc.isDirectory) {
             call.respondText(
                 rejectedHtml("File is no longer available."),
@@ -286,19 +290,19 @@ class BrowserAccess(
               <link rel="icon" href="/favicon.ico" type="image/png">
               <title>$title</title>
               <style>
-                html, body { height: 100%; margin: 0; background: #000; color: #f5f5f7; }
+                html, body { min-height: 100%; margin: 0; background: #000; color: #f5f5f7; }
                 body {
-                  display: flex; align-items: center; justify-content: center;
+                  min-height: 100vh; display: flex; align-items: center; justify-content: center;
                   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
                 }
                 .box {
+                  box-sizing: border-box; margin: 1rem 0;
                   border: 1px solid #3a3a3c; border-radius: 14px; padding: 2rem 2.25rem;
                   max-width: 24rem; width: 90%; text-align: center; background: #0c0c0e;
                   box-shadow: 0 12px 40px rgba(0,0,0,0.45);
                 }
                 h1 { font-size: 1.1rem; margin: 0 0 1rem; font-weight: 700; }
                 p { font-size: 0.92rem; line-height: 1.55; color: #d1d1d6; margin: 0 0 1rem; }
-                .thanks { font-weight: 700; font-size: 1.25rem; color: #fff; margin: 1rem 0 0; }
                 label { display: block; text-align: left; font-size: 0.8rem; color: #aeaeb2; margin: 0.6rem 0 0.25rem; }
                 input[type=text], input[type=password] {
                   width: 100%; box-sizing: border-box; padding: 0.65rem 0.75rem;
@@ -319,11 +323,24 @@ class BrowserAccess(
             </html>
         """.trimIndent()
 
-        fun useClientHtml(): String = pageShell(
+        fun useClientHtml(access: CameraAccess = CameraAccess()): String = pageShell(
             title = "WebDAV Server",
             bodyInner = """
-                <p>Use a WebDAV client to access this server instead.</p>
-                <p class="thanks">Thankyou</p>
+                <h1>Connect with Finder</h1>
+                <label for="finder-address">Server address</label>
+                <input id="finder-address" type="text" readonly>
+                <script>
+                  const address = document.getElementById('finder-address');
+                  address.value = window.location.origin + '/';
+                  address.addEventListener('focus', () => address.select());
+                </script>
+                <p>Copy the address, press <kbd>⌘K</kbd> in Finder and paste it. Sign in with your WebDAV account.</p>
+                <p>Open <strong>Photos by Date</strong> and choose a year, month, and day. Select a photo and press Space for Quick Look.</p>
+                ${if (access.dates) """<p><a href="/${PhotoGallery.PATH}/">Open photo gallery</a></p>""" else ""}
+                <h2>Shared folders</h2>
+                <p>Camera: ${if (access.camera) "On" else "Off"}<br>
+                Photos by Date: ${if (access.dates) "On" else "Off"}</p>
+                <p>Change sharing on the Server screen in the phone app. Reconnect Finder if it still shows the old folder list.</p>
             """.trimIndent()
         )
 

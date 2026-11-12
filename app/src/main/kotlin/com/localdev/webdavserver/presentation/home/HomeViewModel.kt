@@ -20,6 +20,14 @@ class HomeViewModel : ViewModel() {
             initialValue = AppModule.webDavEngine.state.value
         )
 
+    val cameraAccess = AppModule.webDavEngine.cameraAccess
+
+    fun setCameraShared(shared: Boolean) =
+        AppModule.webDavEngine.setCameraAccess(cameraAccess.value.copy(camera = shared))
+
+    fun setPhotosByDateShared(shared: Boolean) =
+        AppModule.webDavEngine.setCameraAccess(cameraAccess.value.copy(dates = shared))
+
     private val _rootConfigured = MutableStateFlow(false)
     val rootConfigured: StateFlow<Boolean> = _rootConfigured.asStateFlow()
 

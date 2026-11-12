@@ -34,8 +34,17 @@ if [[ -f .env ]]; then
   # shellcheck disable=SC1091
   source .env
 fi
-if [[ -z "${JAVA_HOME:-}" ]] && [[ -x /usr/libexec/java_home ]]; then
-  JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || true)"
+if [[ -z "${JAVA_HOME:-}" ]]; then
+  if [[ -x /usr/libexec/java_home ]]; then
+    JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || true)"
+  fi
+  # Android Studio bundles a JBR that is not registered with macOS java_home.
+  if [[ -z "$JAVA_HOME" ]]; then
+    for dir in "/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+      "$HOME/Applications/Android Studio.app/Contents/jbr/Contents/Home"; do
+      if [[ -x "$dir/bin/java" ]]; then JAVA_HOME="$dir"; break; fi
+    done
+  fi
   export JAVA_HOME
 fi
 if [[ -z "${ANDROID_HOME:-}" ]]; then
@@ -66,16 +75,21 @@ fi
 if ! command -v java >/dev/null 2>&1; then
   echo "Java 17 not found. Install JDK 17 or configure JAVA_HOME." >&2; exit 1
 fi
-java_version="$(java -version 2>&1 | head -n 1)"
+if ! java_version="$(java -version 2>&1)"; then
+  echo "No usable Java runtime. Run ./setup-env.sh or configure JAVA_HOME." >&2
+  exit 1
+fi
+java_version="${java_version%%$'\n'*}"
 echo "==> $java_version"
-if ! java -version 2>&1 | head -n 1 | grep -Eq '"17([.+"]|$)'; then
-  echo "This Android project requires JDK 17 (set JAVA_HOME)." >&2; exit 1
+java_major="$(printf '%s\n' "$java_version" | sed -E 's/^.*version "([0-9]+)(\..*)?".*$/\1/')"
+if ! [[ "$java_major" =~ ^[0-9]+$ ]] || (( java_major < 17 )); then
+  echo "This Android project requires JDK 17 or newer (set JAVA_HOME)." >&2; exit 1
 fi
 if [[ -z "${ANDROID_HOME:-}" ]] || [[ ! -d "$ANDROID_HOME/platforms/android-36" ]]; then
   echo "Android SDK API 36 missing. Install it via Android Studio SDK Manager." >&2; exit 1
 fi
-if [[ ! -f gradle/wrapper/gradle-wrapper.jar ]]; then
-  echo "Gradle wrapper JAR missing; run the repository setup instructions first." >&2; exit 1
+if [[ ! -f gradlew ]] || [[ ! -f gradle/wrapper/gradle-wrapper.jar ]]; then
+  echo "Gradle wrapper missing. Run ./setup-env.sh first." >&2; exit 1
 fi
 chmod +x ./gradlew
 echo "==> Building APK (incremental)"

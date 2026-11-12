@@ -1,6 +1,8 @@
 package com.localdev.webdavserver.data.server
 
 import android.util.Base64
+import android.util.Log
+import android.net.Uri
 import com.localdev.webdavserver.data.local.model.UserEntity
 import com.localdev.webdavserver.domain.repository.LogRepository
 import com.localdev.webdavserver.domain.repository.UserRepository
@@ -83,17 +85,32 @@ class RequestRouter(
             statusMessage = "Unauthorized",
             ip = remoteIp(call)
         )
+        Log.i(TAG, "${call.request.httpMethod.value} ${call.request.path()} -> 401 Unauthorized")
     }
 
     fun logResult(call: ApplicationCall, user: String, status: HttpStatusCode) {
+        val method = call.request.httpMethod.value
+        val path = call.request.path()
+        if (status == HttpStatusCode.NotFound &&
+            (method == "PROPFIND" || method == "GET" || method == "HEAD")
+        ) {
+            val name = Uri.decode(path.trimEnd('/').substringAfterLast('/'))
+            if (name.startsWith("._") || name == ".DS_Store") return
+        }
+
         logRepository.log(
-            method = call.request.httpMethod.value,
-            path = call.request.path(),
+            method = method,
+            path = path,
             username = user,
             statusCode = status.value,
             statusMessage = status.description,
             ip = remoteIp(call)
         )
+        Log.i(TAG, "$method $path user=$user -> ${status.value} ${status.description}")
+    }
+
+    private companion object {
+        const val TAG = "WebDavRequest"
     }
 
     private fun remoteIp(call: ApplicationCall): String =
