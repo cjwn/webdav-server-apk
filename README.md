@@ -111,6 +111,8 @@ Never commit keystores or real passwords. See `.env.example` for the signing var
 
 Tip: scan the QR code on the Home screen.
 
+The server homepage also includes an optional [read-only rclone mount for macOS](docs/macos-rclone-mount.md) with commands you can copy.
+
 ### Windows Basic auth over HTTP
 
 If mapping fails, allow Basic auth over non-HTTPS (local use only):

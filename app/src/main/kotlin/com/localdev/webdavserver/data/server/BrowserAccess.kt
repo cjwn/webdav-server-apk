@@ -317,6 +317,16 @@ class BrowserAccess(
                 .err { color: #ff453a; margin-bottom: 0.75rem; }
                 .ok { color: #30d158; }
                 a { color: #0a84ff; }
+                .mount-guide { text-align: left; margin-top: 1.5rem; }
+                .mount-guide summary { cursor: pointer; }
+                .mount-guide textarea {
+                  box-sizing: border-box; width: 100%; resize: vertical; padding: 0.65rem;
+                  border: 1px solid #3a3a3c; border-radius: 8px;
+                  background: #1c1c1e; color: #fff; font: inherit;
+                }
+                .mount-guide button { width: auto; margin: 0.35rem 0 0.75rem; }
+                .mount-guide ol { padding-left: 1.35rem; }
+                .mount-guide li { margin-bottom: 0.75rem; }
               </style>
             </head>
             <body><div class="box">$bodyInner</div></body>
@@ -341,6 +351,39 @@ class BrowserAccess(
                 <p>Camera: ${if (access.camera) "On" else "Off"}<br>
                 Photos by Date: ${if (access.dates) "On" else "Off"}</p>
                 <p>Change sharing on the Server screen in the phone app. Reconnect Finder if it still shows the old folder list.</p>
+                <details class="mount-guide">
+                  <summary>Optional Mac mount with rclone</summary>
+                  <p>This read-only mount requires rclone. It can reuse cached directory listings during the session. Speed depends on your Mac and network.</p>
+                  <ol>
+                    <li><a href="https://rclone.org/install/#macos">Install rclone</a>. If you use Homebrew, run <code>brew install rclone</code>.</li>
+                    <li>In Terminal, run <code>rclone config</code>. Create a remote named <code>phone</code>, choose <code>webdav</code> and vendor <code>other</code>, then paste the server address above. Enter your current WebDAV username and password in Terminal. If you already have a <code>phone</code> remote for this server, edit it when the address or password changes.</li>
+                    <li>
+                      <label for="mount-command">Mount in Terminal</label>
+                      <textarea id="mount-command" rows="4" readonly>mkdir -p ~/Phone-WebDAV && rclone nfsmount phone: ~/Phone-WebDAV --read-only --dir-cache-time 30s --poll-interval 0</textarea>
+                      <button type="button" data-copy="mount-command">Copy mount command</button>
+                      <p>Keep this Terminal window open. In Finder, press <kbd>⇧⌘G</kbd> and open <code>~/Phone-WebDAV</code>.</p>
+                    </li>
+                    <li>
+                      <label for="unmount-command">Unmount in a second Terminal window</label>
+                      <textarea id="unmount-command" rows="1" readonly>/sbin/umount ~/Phone-WebDAV</textarea>
+                      <button type="button" data-copy="unmount-command">Copy unmount command</button>
+                    </li>
+                  </ol>
+                  <p id="mount-copy-status" role="status"></p>
+                </details>
+                <script>
+                  document.querySelectorAll('[data-copy]').forEach(button => {
+                    button.addEventListener('click', () => {
+                      const command = document.getElementById(button.dataset.copy);
+                      command.focus();
+                      command.select();
+                      let copied = false;
+                      try { copied = document.execCommand('copy'); } catch {}
+                      document.getElementById('mount-copy-status').textContent =
+                        copied ? 'Command copied.' : 'Command selected. Press ⌘C to copy.';
+                    });
+                  });
+                </script>
             """.trimIndent()
         )
 
