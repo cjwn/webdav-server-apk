@@ -13,17 +13,16 @@ import kotlinx.coroutines.withContext
 object DestinationParser {
     /**
      * Extracts the path portion of a WebDAV Destination header, stripping
-     * scheme/host. Returns a server-relative path beginning with '/'.
+     * scheme/host. Preserves the URL encoding for SafResolver.
      */
     fun parse(destinationHeader: String?): String? {
         if (destinationHeader.isNullOrBlank()) return null
         val raw = destinationHeader.trim()
-        val path = if (raw.startsWith("http://") || raw.startsWith("https://")) {
+        return if (raw.startsWith("http://") || raw.startsWith("https://")) {
             val afterScheme = raw.substringAfter("://")
             val slash = afterScheme.indexOf('/')
             if (slash < 0) "/" else afterScheme.substring(slash)
         } else raw
-        return android.net.Uri.decode(path)
     }
 }
 

@@ -29,6 +29,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,6 +72,7 @@ fun HomeScreen(
     viewModel: HomeViewModel = viewModel()
 ) {
     val state by viewModel.serverState.collectAsState()
+    val cameraAccess by viewModel.cameraAccess.collectAsState()
     val permissionRevoked by viewModel.permissionRevoked.collectAsState()
     val rootConfigured by viewModel.rootConfigured.collectAsState()
     val hideAddress by viewModel.hideAddress.collectAsState()
@@ -156,6 +158,13 @@ fun HomeScreen(
             )
 
             Spacer(Modifier.height(16.dp))
+
+            if (rootConfigured) {
+                Text("Camera sharing", style = MaterialTheme.typography.titleMedium)
+                ShareSwitch("Camera", cameraAccess.camera, viewModel::setCameraShared)
+                ShareSwitch("Photos by Date", cameraAccess.dates, viewModel::setPhotosByDateShared)
+                Spacer(Modifier.height(16.dp))
+            }
 
             if (configLoaded && state.isRunning && state.ipAddress != null) {
                 QrCard(
@@ -416,5 +425,18 @@ private fun WarningBanner(message: String) {
     ) {
         Text("⚠️  $message", style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error)
+    }
+}
+
+
+@Composable
+private fun ShareSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label)
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

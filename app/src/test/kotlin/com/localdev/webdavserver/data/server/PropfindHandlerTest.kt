@@ -11,6 +11,7 @@ import io.ktor.http.*
 import io.ktor.server.application.call
 import io.ktor.server.routing.*
 import io.ktor.server.testing.testApplication
+import java.io.IOException
 import org.junit.Assert.*
 import org.junit.Test
 import org.mockito.Mockito.*
@@ -67,4 +68,31 @@ class PropfindHandlerTest {
     }
     @Test fun `depth one returns diagnostics matching the actual XML`() = checkDepth("1", 2)
     @Test fun `depth zero returns root only and skips child listing`() = checkDepth("0", 0)
+
+    @Test
+    fun `directory read failure returns an error instead of a successful empty listing`() {
+        val saf = mock(SafResolver::class.java)
+        val root = mock(DocumentFile::class.java)
+        `when`(saf.resolve(root, "/")).thenReturn(root)
+        `when`(root.exists()).thenReturn(true)
+        `when`(root.isDirectory).thenReturn(true)
+        `when`(saf.listChildrenForPropfind(root, false)).thenAnswer {
+            throw IOException("Directory is unavailable")
+        }
+        testApplication {
+            application {
+                routing {
+                    route("/") {
+                        handle { PropfindHandler(saf).handle(call, root, "/", false) }
+                    }
+                }
+            }
+            val response = client.request("/") {
+                method = HttpMethod("PROPFIND")
+                header("Depth", "1")
+            }
+            assertEquals(HttpStatusCode.InternalServerError, response.status)
+            assertNull(response.headers["X-WebDAV-Entries"])
+        }
+    }
 }

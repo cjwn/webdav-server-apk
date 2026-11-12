@@ -3,11 +3,16 @@ package com.localdev.webdavserver.data.server
 import androidx.documentfile.provider.DocumentFile
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.httpMethod
 import io.ktor.server.response.header
-import io.ktor.server.response.respondOutputStream
+import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
+import io.ktor.utils.io.ByteWriteChannel
+import io.ktor.utils.io.writeFully
+import java.io.EOFException
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -46,48 +51,47 @@ class GetHandler(
             return HttpStatusCode.OK
         }
 
-        val rangeHeader = call.request.headers["Range"]
-        if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
-            val range = parseRange(rangeHeader, length)
-            if (range != null) {
-                val (start, end) = range
-                call.response.header("Content-Range", "bytes $start-$end/$length")
-                call.response.header("Content-Length", (end - start + 1).toString())
-                call.respondOutputStream(ContentType.parse(mime), HttpStatusCode.PartialContent) {
-                    withContext(Dispatchers.IO) {
-                        saf.openInput(doc)?.use { input ->
-                            input.skip(start)
-                            val buffer = ByteArray(64 * 1024)
-                            var remaining = end - start + 1
-                            while (remaining > 0) {
-                                val toRead = minOf(buffer.size.toLong(), remaining).toInt()
-                                val read = input.read(buffer, 0, toRead)
-                                if (read <= 0) break
-                                write(buffer, 0, read)
-                                onBytesOut(read.toLong())
-                                remaining -= read
-                            }
-                        }
-                    }
-                }
-                return HttpStatusCode.PartialContent
-            }
+        val range = call.request.headers["Range"]?.takeIf { it.startsWith("bytes=") }
+            ?.let { parseRange(it, length) }
+        val start = range?.first ?: 0L
+        val count = range?.let { it.second - it.first + 1 } ?: length
+        val responseStatus = if (range == null) HttpStatusCode.OK else HttpStatusCode.PartialContent
+        if (range != null) {
+            call.response.header("Content-Range", "bytes $start-${range.second}/$length")
         }
 
-        call.respondOutputStream(ContentType.parse(mime), HttpStatusCode.OK) {
-            withContext(Dispatchers.IO) {
-                saf.openInput(doc)?.use { input ->
+        call.respond(object : OutgoingContent.WriteChannelContent() {
+            override val contentType = ContentType.parse(mime)
+            override val contentLength = count
+            override val status = responseStatus
+
+            override suspend fun writeTo(channel: ByteWriteChannel) = withContext(Dispatchers.IO) {
+                val input = saf.openInput(doc) ?: throw IOException("Could not open file")
+                input.use {
+                    var offset = start
+                    while (offset > 0) {
+                        val skipped = input.skip(offset)
+                        if (skipped > 0) {
+                            offset -= skipped
+                        } else {
+                            if (input.read() < 0) throw EOFException("File changed during read")
+                            offset--
+                        }
+                    }
+
                     val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read <= 0) break
-                        write(buffer, 0, read)
+                    var remaining = count
+                    while (remaining > 0) {
+                        val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                        if (read < 0) throw EOFException("File changed during read")
+                        channel.writeFully(buffer, 0, read)
                         onBytesOut(read.toLong())
+                        remaining -= read
                     }
                 }
             }
-        }
-        return HttpStatusCode.OK
+        })
+        return responseStatus
     }
 
     private fun parseRange(header: String, length: Long): Pair<Long, Long>? {

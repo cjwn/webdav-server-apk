@@ -9,8 +9,12 @@ import com.localdev.webdavserver.data.local.model.FileNode
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.file.Files
+import java.nio.file.NoSuchFileException
+import java.nio.file.attribute.BasicFileAttributes
 
 /**
  * Resolves WebDAV / file-browser paths to [DocumentFile] handles.
@@ -62,6 +66,24 @@ class SafResolver(private val context: Context) {
      */
     fun resolve(root: DocumentFile, path: String): DocumentFile? {
         val segments = splitPath(path) ?: return null
+        return resolveSegments(root, segments)
+    }
+
+    private fun resolveSegments(root: DocumentFile, segments: List<String>): DocumentFile? {
+        if (segments.isEmpty()) return root
+        val rootFile = fileOf(root)
+        if (rootFile != null) {
+            val target = File(rootFile, segments.joinToString(File.separator))
+            if (!target.exists()) return null
+            // Check the resolved path too, since a symlink can point outside the share.
+            val withinRoot = try {
+                target.canonicalFile.toPath().startsWith(rootFile.canonicalFile.toPath())
+            } catch (_: IOException) {
+                false
+            }
+            return if (withinRoot) DocumentFile.fromFile(target) else null
+        }
+
         var current: DocumentFile = root
         for (seg in segments) {
             val child = current.findFile(seg) ?: return null
@@ -78,13 +100,9 @@ class SafResolver(private val context: Context) {
     fun resolveParent(root: DocumentFile, path: String): Pair<DocumentFile, String>? {
         val segments = splitPath(path) ?: return null
         if (segments.isEmpty()) return null
-        var current: DocumentFile = root
-        for (i in 0 until segments.size - 1) {
-            val child = current.findFile(segments[i]) ?: return null
-            if (!child.isDirectory) return null
-            current = child
-        }
-        return current to segments.last()
+        val parent = resolveSegments(root, segments.subList(0, segments.lastIndex)) ?: return null
+        if (!parent.isDirectory) return null
+        return parent to segments.last()
     }
 
     fun listChildren(dir: DocumentFile, includeHidden: Boolean): List<FileNode> {
@@ -107,18 +125,24 @@ class SafResolver(private val context: Context) {
     fun listChildrenForPropfind(dir: DocumentFile, includeHidden: Boolean): List<FileNode> {
         val file = fileOf(dir)
         if (file != null) {
-            if (!file.isDirectory) return emptyList()
-            return (file.listFiles() ?: emptyArray())
+            val children = file.listFiles() ?: throw IOException("Could not read directory")
+            return children
                 .asSequence()
                 .filter { includeHidden || !it.name.startsWith(".") }
-                .map { child ->
-                    val isDir = child.isDirectory
+                .mapNotNull { child ->
+                    val attributes = try {
+                        Files.readAttributes(child.toPath(), BasicFileAttributes::class.java)
+                    } catch (_: NoSuchFileException) {
+                        // A file can disappear between listing and reading its attributes.
+                        return@mapNotNull null
+                    }
+                    val isDir = attributes.isDirectory
                     FileNode(
                         uri = Uri.fromFile(child).toString(),
                         name = child.name,
                         isDirectory = isDir,
-                        sizeBytes = if (isDir) 0L else child.length(),
-                        lastModified = child.lastModified(),
+                        sizeBytes = if (isDir) 0L else attributes.size(),
+                        lastModified = attributes.lastModifiedTime().toMillis(),
                         mimeType = guessMime(child.name),
                         childCount = 0
                     )

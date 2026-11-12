@@ -2,6 +2,8 @@ package com.localdev.webdavserver.data.server
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
+import androidx.documentfile.provider.DocumentFile
 import com.localdev.webdavserver.data.local.model.Role
 import com.localdev.webdavserver.domain.repository.LogRepository
 import com.localdev.webdavserver.domain.repository.SettingsRepository
@@ -18,6 +20,11 @@ import io.ktor.server.request.path
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,6 +57,21 @@ class WebDavEngine(
     private val settingsRepository: SettingsRepository,
     private val logRepository: LogRepository
 ) {
+    private val cameraPreferences = context.getSharedPreferences("camera_access", Context.MODE_PRIVATE)
+
+    private val _cameraAccess = MutableStateFlow(
+        cameraPreferences.getInt("visibility", 3).let { visibility ->
+            CameraAccess(camera = visibility and 1 != 0, dates = visibility and 2 != 0)
+        }
+    )
+    val cameraAccess: StateFlow<CameraAccess> = _cameraAccess.asStateFlow()
+
+    fun setCameraAccess(access: CameraAccess) {
+        val visibility = (if (access.camera) 1 else 0) + (if (access.dates) 2 else 0)
+        cameraPreferences.edit().putInt("visibility", visibility).apply()
+        _cameraAccess.value = access
+    }
+
     private val saf = SafResolver(context)
     private val lockManager = LockManager()
     private val router = RequestRouter(userRepository, logRepository)
@@ -66,12 +88,15 @@ class WebDavEngine(
                 Role.USER -> resolveUserHome(user.username, user.rootFolderUri)
             }
         },
-        onBytesOut = { n -> addBytesOut(n) }
+        onBytesOut = { n -> addBytesOut(n) },
+        cameraAccess = { cameraAccess.value }
     )
     private val putHandler = PutHandler(saf) { n -> addBytesIn(n) }
     private val deleteHandler = DeleteHandler(saf)
     private val mkcolHandler = MkcolHandler(saf)
     private val propfindHandler = PropfindHandler(saf)
+    private val photosByDate = PhotosByDate(saf)
+    private val photoGallery = PhotoGallery(photosByDate, saf, getHandler)
     private val proppatchHandler = ProppatchHandler(saf)
     private val copyHandler = CopyHandler(saf)
     private val moveHandler = MoveHandler(saf)
@@ -97,6 +122,15 @@ class WebDavEngine(
         return runCatching {
             val engine = embeddedServer(CIO, port = port, host = "0.0.0.0") {
                 configureRouting()
+                if (rootFolderUri != null && cameraAccess.value.dates) {
+                    launch(Dispatchers.IO) {
+                        runCatching {
+                            saf.rootDocument(rootFolderUri)?.let { root ->
+                                photosByDate.preload(root) { isActive }
+                            }
+                        }.onFailure { Log.w("WebDavEngine", "Could not preload photo dates", it) }
+                    }
+                }
             }
             engine.start(wait = false)
             server = engine
@@ -115,6 +149,7 @@ class WebDavEngine(
         runCatching { server?.stop(500, 1000) }
         server = null
         browserAccess.clear()
+        photosByDate.clear()
         bytesIn.set(0)
         bytesOut.set(0)
         _state.value = ServerRuntimeState(isRunning = false, port = _state.value.port)
@@ -163,7 +198,8 @@ class WebDavEngine(
 
     private suspend fun dispatch(call: ApplicationCall) {
         val methodName = call.request.httpMethod.value.uppercase()
-        val path = Uri.decode(call.request.path())
+        // Keep the URL encoded until SafResolver decodes the individual segments.
+        val path = call.request.path()
 
         // OPTIONS is allowed without auth so clients can probe capabilities.
         if (methodName == "OPTIONS") {
@@ -175,10 +211,11 @@ class WebDavEngine(
         // Public site icon for unauthenticated GET/HEAD (browsers auto-request /favicon.ico).
         // If the client already sent Authorization (typical WebDAV), fall through so an
         // on-disk favicon.ico in the storage root can still be fetched with Basic auth.
-        if ((methodName == "GET" || methodName == "HEAD") && faviconHandler.isFaviconPath(path)) {
+        if (methodName == "GET" || methodName == "HEAD") {
+            val faviconPath = Uri.decode(path)
             val hasAuth = !call.request.headers["Authorization"].isNullOrBlank()
-            if (!hasAuth) {
-                val (status, bytes) = faviconHandler.handle(call, methodName, path)
+            if (!hasAuth && faviconHandler.isFaviconPath(faviconPath)) {
+                val (status, bytes) = faviconHandler.handle(call, methodName, faviconPath)
                 addBytesOut(bytes)
                 router.logResult(call, "public", status)
                 return
@@ -187,7 +224,10 @@ class WebDavEngine(
 
         // Browser portal: `/` = use client; file URLs = form login + one-time download.
         // Handled before Basic auth so browsers never cache HTTP credentials.
-        val browserResult = browserAccess.tryHandle(call, methodName, path)
+        val segments = SafResolver.splitPath(path)
+        val galleryRequest = segments?.firstOrNull() == PhotoGallery.PATH
+        val browserResult = if (galleryRequest) BrowserHandleResult.NotHandled
+            else browserAccess.tryHandle(call, methodName, path)
         if (browserResult.handled) {
             router.logResult(call, browserResult.username, browserResult.status)
             return
@@ -244,10 +284,65 @@ class WebDavEngine(
                     return
                 }
 
-                // Lock conflict check for write methods.
-                if (methodName in writeMethods) {
-                    val ifToken = call.request.headers["If"]
-                    if (lockManager.isLockedByOther(path, ifToken)) {
+                if (galleryRequest) {
+                    val galleryPath = checkNotNull(segments).drop(1)
+                    val enabled = cameraAccess.value.dates
+                    val status = when {
+                        methodName == "GET" || methodName == "HEAD" ->
+                            photoGallery.handle(call, root, galleryPath, enabled, !user.readOnly)
+                        methodName == "DELETE" && galleryPath == listOf("selection") ->
+                            photoGallery.deleteSelection(call, root, enabled)
+                        else -> {
+                            call.respondText("Method Not Allowed", status = HttpStatusCode.MethodNotAllowed)
+                            HttpStatusCode.MethodNotAllowed
+                        }
+                    }
+                    router.logResult(call, user.username, status)
+                    return
+                }
+
+                val isDateView = photosByDate.matches(segments)
+                val destination = if (methodName == "COPY" || methodName == "MOVE") {
+                    DestinationParser.parse(call.request.headers["Destination"])?.let(SafResolver::splitPath)
+                } else null
+                val access = cameraAccess.value
+                if (access.blocks(segments) || access.blocks(destination)) {
+                    call.respondText("404 Not Found", status = HttpStatusCode.NotFound)
+                    router.logResult(call, user.username, HttpStatusCode.NotFound)
+                    return
+                }
+                val isDateDestination = photosByDate.matches(destination)
+                val listingRoot = methodName == "PROPFIND" && segments?.isEmpty() == true &&
+                    call.request.headers["Depth"] != "0"
+                val camera = if (isDateView || isDateDestination || listingRoot) photosByDate.source(root) else null
+                if (camera != null && !access.dates && (isDateView || isDateDestination)) {
+                    call.respondText("404 Not Found", status = HttpStatusCode.NotFound)
+                    router.logResult(call, user.username, HttpStatusCode.NotFound)
+                    return
+                }
+                if (camera != null && (isDateView || isDateDestination)) {
+                    val status = when {
+                        isDateDestination || methodName in writeMethods || methodName == "LOCK" -> {
+                            call.respondText("Photos by Date is read-only", status = HttpStatusCode.Forbidden)
+                            HttpStatusCode.Forbidden
+                        }
+                        else -> handlePhotosByDate(call, root, camera, checkNotNull(segments).drop(1), methodName)
+                    }
+                    router.logResult(call, user.username, status)
+                    return
+                }
+
+                // Use the same lock key for alternate encodings of a resource URL.
+                val lockPath = if (methodName in writeMethods || methodName == "LOCK") {
+                    if (segments == null) {
+                        call.respondText("400 Bad Request — invalid path", status = HttpStatusCode.BadRequest)
+                        router.logResult(call, user.username, HttpStatusCode.BadRequest)
+                        return
+                    }
+                    WebDavXml.hrefEncode("/" + segments.joinToString("/"))
+                } else null
+                if (methodName in writeMethods && lockPath != null) {
+                    if (lockManager.isLockedByOther(lockPath, call.request.headers["If"])) {
                         call.respondText("423 Locked", status = HttpStatusCode.Locked)
                         router.logResult(call, user.username, HttpStatusCode.Locked)
                         return
@@ -259,11 +354,15 @@ class WebDavEngine(
                     "PUT" -> putHandler.handle(call, root, path)
                     "DELETE" -> deleteHandler.handle(call, root, path)
                     "MKCOL" -> mkcolHandler.handle(call, root, path)
-                    "PROPFIND" -> propfindHandler.handle(call, root, path, showHidden)
+                    "PROPFIND" -> propfindHandler.handle(
+                        call, root, path, showHidden,
+                        extraChild = camera?.takeIf { access.dates }?.let { photosByDate.rootNode() },
+                        excludedChild = "Camera".takeIf { listingRoot && !access.camera }
+                    )
                     "PROPPATCH" -> proppatchHandler.handle(call, root, path)
                     "COPY" -> copyHandler.handle(call, root, path)
                     "MOVE" -> moveHandler.handle(call, root, path)
-                    "LOCK" -> { lockHandler.handleLock(call, path, user.username); HttpStatusCode.OK }
+                    "LOCK" -> { lockHandler.handleLock(call, checkNotNull(lockPath), user.username); HttpStatusCode.OK }
                     "UNLOCK" -> { lockHandler.handleUnlock(call); HttpStatusCode.NoContent }
                     else -> {
                         call.respondText("405 Method Not Allowed",
@@ -276,6 +375,41 @@ class WebDavEngine(
                     FileChangeBus.notifyChanged()
                 }
                 router.logResult(call, user.username, status)
+            }
+        }
+    }
+
+    private suspend fun handlePhotosByDate(
+        call: ApplicationCall,
+        root: DocumentFile,
+        source: PhotosByDate.Source,
+        segments: List<String>,
+        method: String
+    ): HttpStatusCode {
+        val resource = try {
+            withContext(Dispatchers.IO) { photosByDate.resolve(source, segments) }
+        } catch (_: IOException) {
+            call.respondText("Could not index Camera", status = HttpStatusCode.InternalServerError)
+            return HttpStatusCode.InternalServerError
+        }
+        if (resource == null) {
+            call.respondText("404 Not Found", status = HttpStatusCode.NotFound)
+            return HttpStatusCode.NotFound
+        }
+        return when (method) {
+            "PROPFIND" -> propfindHandler.handleVirtual(call, resource.node, resource.children)
+            "GET", "HEAD" -> {
+                val originalPath = resource.originalPath
+                if (originalPath != null) {
+                    getHandler.handle(call, root, originalPath)
+                } else {
+                    call.respondText("WebDAV collection — use PROPFIND to list contents.")
+                    HttpStatusCode.OK
+                }
+            }
+            else -> {
+                call.respondText("405 Method Not Allowed", status = HttpStatusCode.MethodNotAllowed)
+                HttpStatusCode.MethodNotAllowed
             }
         }
     }
